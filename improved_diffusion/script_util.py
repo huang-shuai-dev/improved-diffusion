@@ -1,5 +1,6 @@
 import argparse
 import inspect
+import math
 
 from . import gaussian_diffusion as gd
 from .respace import SpacedDiffusion, space_timesteps
@@ -96,14 +97,33 @@ def create_model(
     use_scale_shift_norm,
     dropout,
 ):
-    if image_size == 256:
-        channel_mult = (1, 1, 2, 2, 4, 4)
-    elif image_size == 64:
-        channel_mult = (1, 2, 3, 4)
-    elif image_size == 32:
-        channel_mult = (1, 2, 2, 2)
+    # 计算需要的下采样层数
+    if isinstance(image_size, tuple):
+        height, width = image_size
+        # 取较大的尺寸计算层数
+        max_size = max(height, width)
+        num_levels = int(math.log2(max_size))
+        # 根据层数动态设置channel_mult
+        if num_levels <= 5:  # 32x32或更小
+            channel_mult = (1, 2, 2, 2)
+        elif num_levels == 6:  # 64x64
+            channel_mult = (1, 2, 3, 4)
+        elif num_levels == 7:  # 128x128
+            channel_mult = (1, 2, 2, 3, 4)
+        elif num_levels == 8:  # 256x256
+            channel_mult = (1, 1, 2, 2, 4, 4)
+        else:  # 更大的尺寸
+            channel_mult = (1, 1, 2, 2, 4, 4, 4)
     else:
-        raise ValueError(f"unsupported image size: {image_size}")
+        # 保持向后兼容性，支持单个数字的image_size
+        if image_size == 256:
+            channel_mult = (1, 1, 2, 2, 4, 4)
+        elif image_size == 64:
+            channel_mult = (1, 2, 3, 4)
+        elif image_size == 32:
+            channel_mult = (1, 2, 2, 2)
+        else:
+            raise ValueError(f"unsupported image size: {image_size}")
 
     attention_ds = []
     for res in attention_resolutions.split(","):
@@ -113,7 +133,6 @@ def create_model(
         in_channels=2,
         model_channels=num_channels,
         out_channels=2,
-        #out_channels=(3 if not learn_sigma else 6),
         num_res_blocks=num_res_blocks,
         attention_resolutions=tuple(attention_ds),
         dropout=dropout,

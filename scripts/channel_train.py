@@ -22,6 +22,12 @@ def main():
     dist_util.setup_dist()
     logger.configure()
 
+    # 处理图像尺寸
+    if args.image_height is not None and args.image_width is not None:
+        image_size = (int(args.image_height), int(args.image_width))
+    else:
+        image_size = int(args.image_size) if args.image_size is not None else None
+
     logger.log("creating model and diffusion...")
     model, diffusion = create_model_and_diffusion(
         **args_to_dict(args, model_and_diffusion_defaults().keys())
@@ -33,6 +39,7 @@ def main():
     data = load_data(
         data_dir=args.data_dir,
         batch_size=args.batch_size,
+        image_size=image_size,  # 传入处理后的图像尺寸
     )
 
     logger.log("training...")
@@ -70,6 +77,9 @@ def create_argparser():
         resume_checkpoint="",
         use_fp16=False,
         fp16_scale_growth=1e-3,
+        image_size=64,  # 默认图像大小
+        image_height=None,  # 新增：图像高度
+        image_width=None,  # 新增：图像宽度
     )
     defaults.update(model_and_diffusion_defaults())
     parser = argparse.ArgumentParser()

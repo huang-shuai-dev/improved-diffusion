@@ -4,7 +4,7 @@ import hdf5storage
 import numpy as np
 
 def load_data(
-    *, data_dir, batch_size, pilot_length=1, snr_db=20.0,
+    *, data_dir, batch_size, image_size=None, pilot_length=1, snr_db=20.0,
     quantize_y=True, n_bits=4, deterministic=False, train=True
 ):
     """
@@ -15,12 +15,11 @@ def load_data(
         - "y": [B, 2, Tx, L] (real y)
         - "y_quant": [B, 2, Tx, L] (quantized y)
         - "p": [B, 2, Rx, L] (pilot)
-        - "scale_h": [B]
+        - "h_max": [B]
         - "scale_y": [B]
     """
     if not data_dir:
         raise ValueError("unspecified data directory")
-
 
     # 只取第一份文件（目前数据集中假设所有样本在一个大文件中）
     file_path = data_dir
@@ -36,6 +35,20 @@ def load_data(
         subcarrier_index=0,
         seed=42
     )
+
+    # 如果指定了image_size，检查数据尺寸是否匹配
+    if image_size is not None:
+        if isinstance(image_size, tuple):
+            # 确保转换为整数
+            height = int(image_size[0])
+            width = int(image_size[1])
+            if height != dataset.tx or width != dataset.rx:
+                raise ValueError(f"Specified image size ({height}, {width}) does not match data dimensions ({dataset.tx}, {dataset.rx})")
+        else:
+            # 单个数字的情况
+            size = int(image_size)
+            if size != dataset.tx or size != dataset.rx:
+                raise ValueError(f"Specified image size {size} does not match data dimensions ({dataset.tx}, {dataset.rx})")
 
     loader = DataLoader(
         dataset,
@@ -54,7 +67,7 @@ def load_data(
                     "y": batch["y"],                     # [B, 2, Tx, L]
                     "y_quant": batch["y_quant"],         # [B, 2, Tx, L]
                     "p": batch["p"],                     # [B, 2, Rx, L]
-                    "scale_h": batch["scale_h"],         # [B]
+                    "h_max": batch["h_max"],         # [B]
                     "scale_y": batch["scale_y"]          # [B]
                 }
             else:
@@ -85,14 +98,17 @@ class ChannelMatrixDataset(Dataset):
         self.pilot = self._generate_qpsk_pilot(self.rx, self.pilot_length)
         self.p_concat = np.stack([np.real(self.pilot), np.imag(self.pilot)], axis=0)  # [2, Rx, L]
 
-        self.scale_y = self._compute_y_quant_scale()
-        self.scale_h = self._compute_h_global_scale()
+        # 计算H的最大值用于归一化
+        self.h_max = np.max(np.abs(self.H_all))
+        if self.normalize:
+            self.H_all_norm = self.H_all / self.h_max
 
+        self.scale_y = self._compute_y_quant_scale()
         self.rng = np.random.default_rng(seed)
 
         print(f"[Dataset] Samples: {self.num_samples}, Tx: {self.tx}, Rx: {self.rx}")
         print(f"[Pilot] Shape: {self.pilot.shape}, SNR: {self.snr_db} dB")
-        print(f"[Global scale_h] {self.scale_h:.4f}, scale_y (0.99) {self.scale_y:.4f}")
+        print(f"[Global scale] h_max: {self.h_max:.4f}, scale_y (0.99) {self.scale_y:.4f}")
 
     def _generate_qpsk_pilot(self, rx_dim, L):
         rng = np.random.default_rng(self.seed)
@@ -102,19 +118,14 @@ class ChannelMatrixDataset(Dataset):
     def _compute_y_quant_scale(self):
         y_vals = []
         for i in range(min(self.num_samples, 500)):
-            H = self.H_all[i]
+            if self.normalize:
+                H = self.H_all_norm[i]
+            else:
+                H = self.H_all[i]
             y = H @ self.pilot
             y_vals.append(np.abs(np.real(y)).ravel())
             y_vals.append(np.abs(np.imag(y)).ravel())
         return np.quantile(np.concatenate(y_vals), 0.99)
-
-    def _compute_h_global_scale(self):
-        h_vals = []
-        for i in range(min(self.num_samples, 500)):
-            H = self.H_all[i]
-            H_concat = np.stack([np.real(H), np.imag(H)], axis=0)  # [2, Tx, Rx]
-            h_vals.append(np.abs(H_concat).ravel())
-        return np.quantile(np.concatenate(h_vals), 0.99)
 
     def _uniform_quantize(self, x, scale, n_bits):
         levels = 2 ** n_bits
@@ -128,7 +139,11 @@ class ChannelMatrixDataset(Dataset):
         return self.num_samples
 
     def __getitem__(self, idx):
-        H = self.H_all[idx]  # [Tx, Rx]
+        if self.normalize:
+            H = self.H_all_norm[idx]  # [Tx, Rx]
+        else:
+            H = self.H_all[idx]  # [Tx, Rx]
+
         y = H @ self.pilot
 
         signal_power = np.mean(np.abs(y) ** 2)
@@ -141,11 +156,6 @@ class ChannelMatrixDataset(Dataset):
         H_concat = np.stack([np.real(H), np.imag(H)], axis=0)  # [2, Tx, Rx]
         y_concat = np.stack([np.real(y), np.imag(y)], axis=0)  # [2, Tx, L]
 
-        # 全局 scale_h 归一化
-        if self.normalize:
-            H_concat = H_concat / self.scale_h
-            y_concat = y_concat / self.scale_h
-
         # y 量化（基于全局 scale_y）
         y_quant = self._uniform_quantize(y_concat, self.scale_y, self.n_bits) if self.quantize_y else y_concat
 
@@ -154,7 +164,7 @@ class ChannelMatrixDataset(Dataset):
             "y": torch.from_numpy(y_concat.astype(np.float32)),
             "y_quant": torch.from_numpy(y_quant.astype(np.float32)),
             "p": torch.from_numpy(self.p_concat.astype(np.float32)),
-            "scale_h": torch.tensor(self.scale_h, dtype=torch.float32),
+            "h_max": torch.tensor(self.h_max, dtype=torch.float32),
             "scale_y": torch.tensor(self.scale_y, dtype=torch.float32),
         }
 
@@ -175,7 +185,7 @@ def test_loader():
         print("H:", batch["H"].shape)           # [2, 64, 16]
         print("y:", batch["y"].shape)           # [2, 64, 8]
         print("y_quant:", batch["y_quant"].shape)
-        print("scale_h:", batch["scale_h"])
+        print("h_max:", batch["h_max"])
         print("scale_y:", batch["scale_y"])
         print("p:", batch["p"].shape)           # [2, 16, 8]
         print("y vs y_quant example:", batch["y"][0, 0, :4], batch["y_quant"][0, 0, :4])
@@ -198,7 +208,7 @@ def test_loader_bk():
         print("H:", batch["H"].shape)           # [B, 2, 64, 16]
         print("y:", batch["y"].shape)           # [B, 2, 64, 8]
         print("y_quant:", batch["y_quant"].shape)  # [B, 2, 64, 8]
-        print("scale_h:", batch["scale_h"])
+        print("h_max:", batch["h_max"])
         print("scale_y:", batch["scale_y"])
         print("y[0][0][:4]:", batch["y"][0, 0, 0, :4])
         print("y_quant[0][0][:4]:", batch["y_quant"][0, 0, 0, :4])
