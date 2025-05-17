@@ -5,7 +5,7 @@ import numpy as np
 
 def load_data(
     *, data_dir, batch_size, pilot_length=1, snr_db=20.0,
-    quantize_y=True, n_bits=4, deterministic=False
+    quantize_y=True, n_bits=4, deterministic=False, train=True
 ):
     """
     Create a generator over (H_tensor, kwargs) batches using ChannelMatrixDataset.
@@ -28,6 +28,7 @@ def load_data(
     dataset = ChannelMatrixDataset(
         file_path=file_path,
         pilot_length=pilot_length,
+        key="output_h",
         snr_db=snr_db,
         quantize_y=quantize_y,
         n_bits=n_bits,
@@ -48,13 +49,16 @@ def load_data(
     while True:
         for batch in loader:
             H = batch["H"]  # [B, 2, Tx, Rx]
-            kwargs = {
-                "y": batch["y"],                     # [B, 2, Tx, L]
-                "y_quant": batch["y_quant"],         # [B, 2, Tx, L]
-                "p": batch["p"],                     # [B, 2, Rx, L]
-                "scale_h": batch["scale_h"],         # [B]
-                "scale_y": batch["scale_y"]          # [B]
-            }
+            if train==False:
+                kwargs = {
+                    "y": batch["y"],                     # [B, 2, Tx, L]
+                    "y_quant": batch["y_quant"],         # [B, 2, Tx, L]
+                    "p": batch["p"],                     # [B, 2, Rx, L]
+                    "scale_h": batch["scale_h"],         # [B]
+                    "scale_y": batch["scale_y"]          # [B]
+                }
+            else:
+                kwargs = {}
             yield H, kwargs
 
 
