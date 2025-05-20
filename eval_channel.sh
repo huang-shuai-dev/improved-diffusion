@@ -1,1 +1,1 @@
-python scripts/channel_evaluate.py --real_data datasets/diffusion_1234.mat --generated_data sample_results/samples_100x2x16x64.npz --output_dir ./evaluation_results
+python scripts/channel_evaluate.py --real_data datasets/diffusion_1234.mat --generated_data sample_results/samples_160x2x16x64.npz --output_dir ./evaluation_results

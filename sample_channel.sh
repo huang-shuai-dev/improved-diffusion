@@ -13,11 +13,11 @@ IMAGE_FLAGS="--image_height 16 --image_width 64"
 DIFFUSION_FLAGS="--diffusion_steps 4000 --noise_schedule linear"
 
 # 设置训练参数
-TRAIN_FLAGS="--batch_size 32"
+TRAIN_FLAGS="--batch_size 32 --num_samples 160 "
 
 # 运行采样脚本
 python scripts/channel_sample.py \
-    --model_path ./checkpoints/model010000.pt \
+    --model_path ./train_results/model200000.pt \
     $MODEL_FLAGS \
     $IMAGE_FLAGS \
     $DIFFUSION_FLAGS \

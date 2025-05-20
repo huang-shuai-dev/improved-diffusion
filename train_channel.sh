@@ -13,7 +13,7 @@ IMAGE_FLAGS="--image_height 16 --image_width 64"
 DIFFUSION_FLAGS="--diffusion_steps 4000 --noise_schedule linear"
 
 # 设置训练参数
-TRAIN_FLAGS="--lr 1e-4 --batch_size 32 --save_interval 5000 --log_interval 100"
+TRAIN_FLAGS="--lr 1e-4 --batch_size 32 "
 
 # 运行训练脚本
 python scripts/channel_train.py \
